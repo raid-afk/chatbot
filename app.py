@@ -1,118 +1,169 @@
 import streamlit as st
-import os
 from groq import Groq
 import PyPDF2
 
-# --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Raid RAG - DocuChat", page_icon="📄", layout="wide")
+# --- 1. CONFIGURATION PAGE ---
+st.set_page_config(
+    page_title="Assistant AI Pro",
+    page_icon="📄",
+    layout="wide"
+)
 
-# --- TITRE & STYLE ---
-st.title("📄 Docu-Chat : Discutez avec vos PDF")
+# --- 2. STYLE CSS (Clean & Minimaliste) ---
 st.markdown("""
-**Technologie RAG (Retrieval-Augmented Generation)**
-*Importez un document et posez des questions précises dessus. 
-Propulsé par Llama 3 & Groq.*
-""")
-
-# --- SIDEBAR : CONFIGURATION ---
-with st.sidebar:
-    st.header("⚙️ Configuration")
+<style>
+    /* Fond blanc et texte sombre */
+    .stApp {
+        background-color: #FFFFFF;
+        color: #111827;
+    }
     
-    # 1. Gestion Clé API
-    # 1. Gestion Clé API (Version corrigée pour le local)
+    /* Sidebar discrète */
+    section[data-testid="stSidebar"] {
+        background-color: #F9FAFB;
+        border-right: 1px solid #E5E7EB;
+    }
+    
+    /* Inputs propres */
+    .stTextInput input, .stSelectbox div[data-baseweb="select"], .stChatInput textarea {
+        background-color: #FFFFFF !important;
+        border: 1px solid #D1D5DB !important;
+        border-radius: 8px !important;
+        color: #111827 !important;
+    }
+    
+    /* Boutons bleus */
+    .stButton button {
+        background-color: #2563EB !important;
+        color: white !important;
+        border-radius: 6px !important;
+        border: none !important;
+    }
+    
+    /* Cacher menu hamburger */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# --- 3. FONCTIONS ---
+
+# Lecture PDF
+def extract_text_from_pdf(pdf_file):
     try:
-        # On essaie de récupérer la clé dans les secrets (pour le Cloud)
-        api_key = st.secrets["GROQ_API_KEY"]
-    except:
-        # Si ça plante (parce qu'on est en local), on ne met rien
-        api_key = None
+        pdf_reader = PyPDF2.PdfReader(pdf_file)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text() or ""
+        return text
+    except Exception as e:
+        return ""
 
-    # Si la clé n'est pas trouvée, on affiche le champ de saisie
-    if not api_key:
-        api_key = st.text_input("Clé API Groq", type="password")
-    if not api_key:
-        api_key = st.text_input("Clé API Groq", type="password")
+# Générateur pour nettoyer le flux (Fixe le problème d'affichage JSON)
+def generate_chat_responses(chat_completion):
+    """Extrait uniquement le texte du flux de réponse."""
+    for chunk in chat_completion:
+        if chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+
+# --- 4. INTERFACE ---
+st.title("Assistant Documentaire")
+st.caption("Interface simplifiée v2.1 • Lecture PDF active")
+st.markdown("---")
+
+# BARRE LATÉRALE
+with st.sidebar:
+    st.header("Réglages")
     
-    # 2. Upload du fichier
-    st.header("📂 Votre Document")
-    uploaded_file = st.file_uploader("Chargez un PDF", type=("pdf"))
+    # Clé API
+    api_key = st.secrets.get("GROQ_API_KEY")
+    if not api_key:
+        api_key = st.text_input("Clé API Groq", type="password", placeholder="gsk_...")
+    else:
+        st.success("✅ Système Connecté")
 
-    # Bouton Reset
-    if st.button("Effacer la conversation"):
+    st.markdown("### Modèle IA")
+    
+    # CORRECTION CRITIQUE 1 : Dictionnaire de mapping
+    # À gauche : Ce qu'on voit. À droite : L'ID technique pour l'API.
+    models_map = {
+        "Mode Puissant ": "llama-3.3-70b-versatile",
+        "Mode Rapide ": "llama3-8b-8192",
+        "Mode Équilibré ": "mixtral-8x7b-32768"
+    }
+    
+    # On laisse l'utilisateur choisir la "Clé" (le texte lisible)
+    selected_label = st.selectbox("Moteur", list(models_map.keys()), label_visibility="collapsed")
+    # On récupère la "Valeur" (l'ID technique) grâce à la clé
+    selected_model_id = models_map[selected_label]
+
+    st.markdown("### Document")
+    uploaded_file = st.file_uploader("Charger un PDF", type="pdf")
+    
+    st.markdown("---")
+    if st.button("Nouvelle conversation", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
-# --- FONCTION D'EXTRACTION PDF ---
-def extract_text_from_pdf(pdf_file):
-    pdf_reader = PyPDF2.PdfReader(pdf_file)
-    text = ""
-    for page in pdf_reader.pages:
-        text += page.extract_text()
-    return text
-
-# --- LOGIQUE PRINCIPALE ---
+# --- 5. LOGIQUE CHAT ---
 if api_key:
     client = Groq(api_key=api_key)
 
-    # Initialisation de l'historique
     if "messages" not in st.session_state:
         st.session_state.messages = []
+        st.session_state.messages.append({"role": "assistant", "content": "Bonjour. Je suis prêt à analyser vos documents."})
 
-    # GESTION DU PDF
+    # Gestion Contexte
     pdf_context = ""
     if uploaded_file:
-        with st.spinner("Analyse du document en cours..."):
-            raw_text = extract_text_from_pdf(uploaded_file)
-            # On prépare le contexte pour l'IA
-            pdf_context = f"INFORMATION DU DOCUMENT : {raw_text[:25000]} \n\n" 
-            st.success(f"Document analysé ! ({len(raw_text)} caractères)")
-            
-            # Message système invisible pour guider l'IA
-            system_prompt = {
-                "role": "system", 
-                "content": "Tu es un assistant expert. Tu dois répondre aux questions de l'utilisateur EN TE BASANT UNIQUEMENT sur le texte fourni ci-dessus appelé 'INFORMATION DU DOCUMENT'. Si la réponse n'est pas dans le texte, dis-le clairement."
-            }
+        raw_text = extract_text_from_pdf(uploaded_file)
+        if raw_text:
+            pdf_context = f"CONTEXTE PDF : {raw_text[:30000]} \n\n"
+            st.toast("Document analysé avec succès.", icon="📎")
 
-    # AFFICHAGE DES MESSAGES
+    # Afficher historique
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # INPUT UTILISATEUR
-    if prompt := st.chat_input("Posez votre question sur le document..."):
-        # 1. Afficher la question
+    # Input Utilisateur
+    if prompt := st.chat_input("Votre question..."):
+        
+        st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
-        st.session_state.messages.append({"role": "user", "content": prompt})
 
-        # 2. Préparer l'envoi à l'IA
-        messages_for_api = []
+        # Préparation Prompt
+        messages_api = []
+        system_instruction = "Tu es un assistant professionnel. Réponds en français de manière claire et structurée."
         
-        # Si un PDF est chargé, on injecte le contexte au début
         if pdf_context:
-            messages_for_api.append({"role": "system", "content": pdf_context + "Réponds à la question suivante en utilisant le contexte ci-dessus."})
+            system_instruction += " Utilise les informations du PDF fourni pour répondre."
+            messages_api.append({"role": "system", "content": pdf_context})
         
-        # On ajoute l'historique de conversation
-        messages_for_api.extend([
-            {"role": m["role"], "content": m["content"]}
-            for m in st.session_state.messages
-        ])
+        messages_api.append({"role": "system", "content": system_instruction})
+        
+        for m in st.session_state.messages:
+            if m["role"] != "system":
+                messages_api.append(m)
 
-        # 3. Génération de la réponse
-       # 3. Génération de la réponse
+        # Génération Réponse
         with st.chat_message("assistant"):
-            stream = client.chat.completions.create(
-                messages=messages_for_api,
-                model="llama-3.3-70b-versatile",
-                stream=True,
-            )
-            
-            # --- LE FILTRE QUI MANQUAIT ---
-            def gen_text():
-                for chunk in stream:
-                    content = chunk.choices[0].delta.content
-                    if content:
-                        yield content
-            # -----------------------------
-        response = st.write_stream(gen_text())
-        st.session_state.messages.append({"role": "assistant", "content": response})
+            try:
+                stream = client.chat.completions.create(
+                    messages=messages_api,
+                    model=selected_model_id, # Utilisation de l'ID correct
+                    stream=True,
+                    temperature=0.5
+                )
+                # CORRECTION CRITIQUE 2 : On passe par le générateur de nettoyage
+                response = st.write_stream(generate_chat_responses(stream))
+                
+                # Sauvegarde en session
+                st.session_state.messages.append({"role": "assistant", "content": response})
+                
+            except Exception as e:
+                st.error(f"Erreur API : {e}")
+
+else:
+    st.info("Veuillez entrer une clé API valide dans la barre latérale.")
