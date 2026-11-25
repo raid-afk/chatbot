@@ -1,4 +1,7 @@
+import os
+
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 from groq import Groq
 import PyPDF2
 
@@ -76,7 +79,12 @@ with st.sidebar:
     st.header("Réglages")
     
     # Clé API
-    api_key = st.secrets.get("GROQ_API_KEY")
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        try:
+            api_key = st.secrets.get("GROQ_API_KEY")
+        except StreamlitSecretNotFoundError:
+            api_key = None
     if not api_key:
         api_key = st.text_input("Clé API Groq", type="password", placeholder="gsk_...")
     else:
